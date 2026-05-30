@@ -1,0 +1,52 @@
+{
+  "name": "function-scope-line",
+  "displayName": "函数范围线",
+  "description": "在光标所在函数/块的左侧显示完整范围线（包含多行参数签名），并支持一键选中整个函数",
+  "version": "1.0.0",
+  "publisher": "your-publisher-id",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "keywords": ["scope", "function", "highlight", "range", "bracket", "guide", "line"],
+  "license": "MIT",
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "函数范围线",
+      "properties": {
+        "functionScopeLine.color": {
+          "type": "string",
+          "default": "",
+          "description": "范围线颜色，支持 CSS 颜色值如 #FF8C00、rgba(255,140,0,0.8)。留空则使用主题默认括号高亮颜色。"
+        },
+        "functionScopeLine.lineWidth": {
+          "type": "number",
+          "default": 1.5,
+          "description": "范围线宽度（像素）"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "functionRange.select",
+        "title": "选中整个函数/块"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "functionRange.select",
+        "key": "ctrl+alt+c",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}
