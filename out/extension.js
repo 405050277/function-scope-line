@@ -47,12 +47,19 @@ function activate(ctx) {
     }
 }
 /**
+ * 将一行代码中字符串字面量、正则字面量、单行注释的内容替换为空格，
+ * 防止其中的 { } 被误计为括号。
+ */
+function sanitizeLine(text) {
+    return text.replace(/(["'`])(?:\\[\s\S]|(?!\1)[^\\])*\1|\/\/.*|\/(?![/*])(?:\\.|[^/\\\n])+\//g, m => ' '.repeat(m.length));
+}
+/**
  * 从光标位置向上扫描，找到包围光标的最内层 {
  */
 function enclosingOpen(doc, line, ch) {
     let depth = 0;
     for (let l = line; l >= 0; l--) {
-        const txt = doc.lineAt(l).text;
+        const txt = sanitizeLine(doc.lineAt(l).text);
         const end = l === line ? ch : txt.length;
         for (let c = end - 1; c >= 0; c--) {
             if (txt[c] === '}') {
@@ -73,7 +80,7 @@ function enclosingOpen(doc, line, ch) {
 function matchingClose(doc, open) {
     let depth = 0;
     for (let l = open.line; l < doc.lineCount; l++) {
-        const txt = doc.lineAt(l).text;
+        const txt = sanitizeLine(doc.lineAt(l).text);
         const start = l === open.line ? open.character : 0;
         for (let c = start; c < txt.length; c++) {
             if (txt[c] === '{') {
@@ -130,26 +137,43 @@ function nextOpen(doc, fromLine) {
 }
 /**
  * 计算当前光标所在函数/块的完整范围 [签名起始行, 结束位置]
+ * 触发条件：光标行含有 ( 且不是控制流语句（只在函数/方法签名行触发）
  */
 function getRange(doc, cursorLine, cursorCh) {
-    // 方案一：向上找包围光标的 {（光标在函数体内时）
-    const openB = enclosingOpen(doc, cursorLine, cursorCh);
-    if (openB) {
-        const sig = sigStart(doc, openB.line);
-        if (sig <= cursorLine) {
-            const close = matchingClose(doc, openB);
-            if (close)
-                return [sig, close];
-        }
+    const lineText = doc.lineAt(cursorLine).text.trimStart();
+    // 不含 ( 的行直接跳过
+    if (!lineText.includes('('))
+        return null;
+    // 注释行跳过
+    if (/^(\/\/|\/\*|\*)/.test(lineText))
+        return null;
+    // 控制流语句跳过
+    if (/^(if|else|for|while|do\b|switch|try|catch|finally)\b/.test(lineText)
+        || /^\}\s*else\b/.test(lineText)) {
+        return null;
     }
-    // 方案二：向下找 {（光标在签名行上时）
+    // 以 ; 结尾的是普通语句（变量声明/函数调用），不是函数签名，跳过
+    if (lineText.trimEnd().endsWith(';'))
+        return null;
+    // 光标行就是签名起始行，向上查找 template / 修饰行，扩展起始行
     const openF = nextOpen(doc, cursorLine);
     if (openF) {
-        const sig = sigStart(doc, openF.line);
-        if (sig <= cursorLine) {
-            const close = matchingClose(doc, openF);
-            if (close)
-                return [sig, close];
+        const close = matchingClose(doc, openF);
+        if (close) {
+            // 向上最多扫 5 行，把 template<...>、[[...]]、inline、static 等前缀行纳入
+            let sigLine = cursorLine;
+            for (let up = cursorLine - 1; up >= Math.max(0, cursorLine - 5); up--) {
+                const upText = doc.lineAt(up).text.trim();
+                if (!upText || /^[{};]/.test(upText))
+                    break; // 空行或语句结束，停止
+                if (/^(template\s*<|inline\b|static\b|virtual\b|explicit\b|constexpr\b|\[\[)/.test(upText)) {
+                    sigLine = up;
+                }
+                else {
+                    break;
+                }
+            }
+            return [sigLine, close];
         }
     }
     return null;

@@ -2,12 +2,16 @@
   "name": "function-scope-line",
   "displayName": "函数范围线",
   "description": "在光标所在函数/块的左侧显示完整范围线（包含多行参数签名），并支持一键选中整个函数",
-  "version": "1.0.0",
-  "publisher": "your-publisher-id",
+  "version": "1.0.1",
+  "publisher": "405050277",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
   "keywords": ["scope", "function", "highlight", "range", "bracket", "guide", "line"],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/405050277/function-scope-line.git"
+  },
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
