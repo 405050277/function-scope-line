@@ -52,46 +52,74 @@ export function activate(ctx: vscode.ExtensionContext) {
  * 将一行代码中字符串字面量、正则字面量、单行注释的内容替换为空格，
  * 防止其中的 { } 被误计为括号。
  */
-function sanitizeLine(text: string): string {
-    return text.replace(
-        /(["'`])(?:\\[\s\S]|(?!\1)[^\\])*\1|\/\/.*|\/(?![/*])(?:\\.|[^/\\\n])+\//g,
-        m => ' '.repeat(m.length)
-    );
-}
-
-/**
- * 从光标位置向上扫描，找到包围光标的最内层 {
- */
-function enclosingOpen(
-    doc: vscode.TextDocument,
-    line: number,
-    ch: number
-): vscode.Position | null {
-    let depth = 0;
-    for (let l = line; l >= 0; l--) {
-        const txt = sanitizeLine(doc.lineAt(l).text);
-        const end = l === line ? ch : txt.length;
-        for (let c = end - 1; c >= 0; c--) {
-            if (txt[c] === '}') { depth++; }
-            else if (txt[c] === '{') {
-                if (depth === 0) return new vscode.Position(l, c);
-                depth--;
+function sanitizeLine(text: string, inBlockComment: boolean): { result: string; inBlockComment: boolean } {
+    // 预处理器宏行（#define 等）整行视为空，其中括号不参与计数
+    if (!inBlockComment && text.trimStart().startsWith('#')) {
+        return { result: ' '.repeat(text.length), inBlockComment: false };
+    }
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+        if (inBlockComment) {
+            // 在多行注释中，找 */
+            if (text[i] === '*' && text[i + 1] === '/') {
+                out += '  ';
+                i += 2;
+                inBlockComment = false;
+            } else {
+                out += ' ';
+                i++;
             }
+        } else {
+            // 单行注释 //：该行剩余全替换为空格
+            if (text[i] === '/' && text[i + 1] === '/') {
+                out += ' '.repeat(text.length - i);
+                break;
+            }
+            // 多行注释开始 /*
+            if (text[i] === '/' && text[i + 1] === '*') {
+                out += '  ';
+                i += 2;
+                inBlockComment = true;
+                continue;
+            }
+            // 字符串字面量 " ' `
+            if (text[i] === '"' || text[i] === "'" || text[i] === '`') {
+                const q = text[i];
+                out += ' ';
+                i++;
+                while (i < text.length) {
+                    if (text[i] === '\\') { out += '  '; i += 2; }
+                    else if (text[i] === q) { out += ' '; i++; break; }
+                    else { out += ' '; i++; }
+                }
+                continue;
+            }
+            out += text[i];
+            i++;
         }
     }
-    return null;
+    return { result: out, inBlockComment };
 }
 
 /**
- * 找到 { 对应的 }
+ * 找到 { 对应的匹配 }，全程追踪多行注释状态
  */
 function matchingClose(
     doc: vscode.TextDocument,
     open: vscode.Position
 ): vscode.Position | null {
     let depth = 0;
+    let inBlockComment = false;
+    // 先扫 open 行之前的内容，确定进入该行时的注释状态
+    for (let l = 0; l < open.line; l++) {
+        const { inBlockComment: next } = sanitizeLine(doc.lineAt(l).text, inBlockComment);
+        inBlockComment = next;
+    }
     for (let l = open.line; l < doc.lineCount; l++) {
-        const txt = sanitizeLine(doc.lineAt(l).text);
+        const raw = doc.lineAt(l).text;
+        const { result: txt, inBlockComment: next } = sanitizeLine(raw, inBlockComment);
+        inBlockComment = next;
         const start = l === open.line ? open.character : 0;
         for (let c = start; c < txt.length; c++) {
             if (txt[c] === '{') { depth++; }
@@ -105,87 +133,55 @@ function matchingClose(
 }
 
 /**
- * 从 { 所在行向上，通过追踪括号深度找到函数/块签名起始行。
- * 原理：函数参数列表中最后的 ) 对应最前面的 (，当 ( 使深度归零时，
- * 说明找到了函数名所在行（即参数列表开始的那行）。
- */
-function sigStart(doc: vscode.TextDocument, openLine: number): number {
-    let pd = 0;
-    for (let l = openLine; l >= Math.max(0, openLine - 60); l--) {
-        const txt = doc.lineAt(l).text;
-        // { 所在行只扫描 { 之前的内容
-        let end = txt.length - 1;
-        if (l === openLine) {
-            const bi = txt.lastIndexOf('{');
-            if (bi >= 0) end = bi - 1;
-        }
-        for (let c = end; c >= 0; c--) {
-            if (txt[c] === ')') { pd++; }
-            else if (txt[c] === '(') {
-                pd--;
-                if (pd <= 0) return l; // 找到了签名中最外层的 (，这行就是签名起始
-            }
-        }
-    }
-    return openLine;
-}
-
-/**
- * 向下扫描找到第一个 {（用于光标在签名行时）
- */
-function nextOpen(doc: vscode.TextDocument, fromLine: number): vscode.Position | null {
-    for (let l = fromLine; l < Math.min(doc.lineCount, fromLine + 30); l++) {
-        const idx = doc.lineAt(l).text.indexOf('{');
-        if (idx >= 0) return new vscode.Position(l, idx);
-    }
-    return null;
-}
-
-/**
- * 计算当前光标所在函数/块的完整范围 [签名起始行, 结束位置]
- * 触发条件：光标行含有 ( 且不是控制流语句（只在函数/方法签名行触发）
+ * 触发条件1：光标左侧去掉尾部空格后，以 ) { 或 ){ 结尾
+ *   → 从该行的 { 向下找匹配 }，画线
+ *
+ * 触发条件2：光标左侧到行首全是空格（光标在行首），且光标右侧能找到 ) { 或 ){
+ *   → 同样从该 { 向下找匹配 }，画线
  */
 function getRange(
     doc: vscode.TextDocument,
     cursorLine: number,
     cursorCh: number
 ): [number, vscode.Position] | null {
-    const lineText = doc.lineAt(cursorLine).text.trimStart();
+    // 先确定到光标行为止的多行注释状态
+    let inBC = false;
+    for (let l = 0; l < cursorLine; l++) {
+        const { inBlockComment } = sanitizeLine(doc.lineAt(l).text, inBC);
+        inBC = inBlockComment;
+    }
+    const { result: line } = sanitizeLine(doc.lineAt(cursorLine).text, inBC);
+    const leftText = line.substring(0, cursorCh);
 
-    // 不含 ( 的行直接跳过
-    if (!lineText.includes('(')) return null;
-
-    // 注释行跳过
-    if (/^(\/\/|\/\*|\*)/.test(lineText)) return null;
-
-    // 控制流语句跳过
-    if (/^(if|else|for|while|do\b|switch|try|catch|finally)\b/.test(lineText)
-        || /^\}\s*else\b/.test(lineText)) {
-        return null;
+    // 触发条件1：光标左侧以 ) { 或 ){ 结尾
+    if (/\)\s*\{\s*$/.test(leftText)) {
+        const braceIdx = leftText.lastIndexOf('{');
+        const closePos = matchingClose(doc, new vscode.Position(cursorLine, braceIdx));
+        if (closePos) return [cursorLine, closePos];
     }
 
-    // 以 ; 结尾的是普通语句（变量声明/函数调用），不是函数签名，跳过
-    if (lineText.trimEnd().endsWith(';')) return null;
-
-    // 光标行就是签名起始行，向上查找 template / 修饰行，扩展起始行
-    const openF = nextOpen(doc, cursorLine);
-    if (openF) {
-        const close = matchingClose(doc, openF);
-        if (close) {
-            // 向上最多扫 5 行，把 template<...>、[[...]]、inline、static 等前缀行纳入
-            let sigLine = cursorLine;
-            for (let up = cursorLine - 1; up >= Math.max(0, cursorLine - 5); up--) {
-                const upText = doc.lineAt(up).text.trim();
-                if (!upText || /^[{};]/.test(upText)) break;  // 空行或语句结束，停止
-                if (/^(template\s*<|inline\b|static\b|virtual\b|explicit\b|constexpr\b|\[\[)/.test(upText)) {
-                    sigLine = up;
-                } else {
-                    break;
-                }
+    // 触发条件2：光标左侧全是空格，向右跨行搜索 ) { 或 ){
+    // 起点为当前光标行，最多向下扫 60 行（覆盖超长参数列表）
+    // 如果当前行是纯空行（什么代码都没有），不触发
+    if (/^\s*$/.test(leftText) && doc.lineAt(cursorLine).text.trim().length > 0) {
+        let bc = inBC;
+        for (let l = cursorLine; l < Math.min(doc.lineCount, cursorLine + 60); l++) {
+            const startC = l === cursorLine ? cursorCh : 0;
+            const raw = doc.lineAt(l).text;
+            const { result: sanitized, inBlockComment: nextBc } = sanitizeLine(raw, bc);
+            const searchText = sanitized.substring(startC);
+            const m = searchText.match(/\)\s*\{/);
+            if (m && m.index !== undefined) {
+                const braceIdx = startC + m.index + m[0].lastIndexOf('{');
+                const closePos = matchingClose(doc, new vscode.Position(l, braceIdx));
+                if (closePos) return [cursorLine, closePos];
             }
-            return [sigLine, close];
+            // 若遇到以 ; 结尾的行（函数体内语句），停止向下搜索
+            if (l > cursorLine && /;\s*$/.test(sanitized.trimEnd())) break;
+            bc = nextBc;
         }
     }
+
     return null;
 }
 

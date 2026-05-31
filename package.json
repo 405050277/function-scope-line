@@ -1,12 +1,13 @@
 {
   "name": "function-scope-line",
-  "displayName": "函数范围线",
-  "description": "在光标所在函数/块的左侧显示完整范围线（包含多行参数签名），并支持一键选中整个函数",
-  "version": "1.0.1",
+  "displayName": "代码范围线",
+  "description": "光标移到任意代码块（函数、类、结构体等）名称上，左侧就显示完整范围垂线；支持一键选中整个代码块",
+  "version": "1.0.5",
+  "icon": "icon.png",
   "publisher": "405050277",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other"],
-  "keywords": ["scope", "function", "highlight", "range", "bracket", "guide", "line"],
+  "keywords": ["scope", "function", "class", "struct", "block", "highlight", "range", "bracket", "guide", "line"],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,7 +17,7 @@
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "函数范围线",
+      "title": "代码范围线",
       "properties": {
         "functionScopeLine.color": {
           "type": "string",
@@ -33,7 +34,7 @@
     "commands": [
       {
         "command": "functionRange.select",
-        "title": "选中整个函数/块"
+        "title": "选中整个代码块"
       }
     ],
     "keybindings": [
@@ -46,7 +47,8 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "build": "tsc -p ./ && npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
